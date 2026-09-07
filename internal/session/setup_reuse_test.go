@@ -2,6 +2,7 @@ package session
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/mensfeld/code-on-incus/internal/container"
@@ -9,23 +10,26 @@ import (
 )
 
 // fakeDirProbe is a minimal containerCommandRunner: it records the command and
-// returns success/failure to stand in for `test -d`'s exit status.
+// returns success/failure to stand in for the marker-check's exit status.
 type fakeDirProbe struct {
-	present bool
-	gotCmd  string
+	seeded bool
+	gotCmd string
 }
 
 func (f *fakeDirProbe) ExecCommand(cmd string, _ container.ExecCommandOptions) (string, error) {
 	f.gotCmd = cmd
-	if f.present {
+	if f.seeded {
 		return "", nil
 	}
-	return "", fmt.Errorf("exit status 1") // `test -d` on a missing dir
+	return "", fmt.Errorf("exit status 1") // marker absent
 }
 
-// toolConfigDirPresent probes the tool's config dir via `test -d` and maps the
-// exit status to presence (#708 follow-up: gates reuse-seeding of a new tool).
-func TestToolConfigDirPresent(t *testing.T) {
+// toolConfigSeeded must key off the tool's ESSENTIAL config files, not the
+// dir's existence or content — the base image pre-creates the config dirs and
+// agent installers can leave unrelated files in them, so an existence/content
+// check would wrongly report a tool already-configured and skip reuse-seeding
+// (#708 follow-up).
+func TestToolConfigSeeded(t *testing.T) {
 	c, err := tool.Get("claude")
 	if err != nil {
 		t.Fatalf("tool.Get: %v", err)
@@ -35,20 +39,27 @@ func TestToolConfigDirPresent(t *testing.T) {
 		t.Fatal("claude should implement ToolWithConfigDirFiles")
 	}
 
-	t.Run("present", func(t *testing.T) {
-		fp := &fakeDirProbe{present: true}
-		if !toolConfigDirPresent(fp, "/home/code", tcf) {
-			t.Error("want present=true when test -d succeeds")
+	t.Run("seeded when an essential file exists", func(t *testing.T) {
+		fp := &fakeDirProbe{seeded: true}
+		if !toolConfigSeeded(fp, "/home/code", tcf) {
+			t.Error("want seeded=true when an essential config file exists")
 		}
-		if fp.gotCmd != "test -d /home/code/.claude" {
-			t.Errorf("probe command = %q, want `test -d /home/code/.claude`", fp.gotCmd)
+		// It must test the tool's essential files (not `test -d`/`ls -A`, which
+		// the pre-created dirs / installer files would fool).
+		for _, f := range tcf.EssentialConfigFiles() {
+			if !strings.Contains(fp.gotCmd, "test -f /home/code/.claude/"+f) {
+				t.Errorf("probe must test essential file %q, got %q", f, fp.gotCmd)
+			}
+		}
+		if strings.Contains(fp.gotCmd, "test -d") || strings.Contains(fp.gotCmd, "ls -A") {
+			t.Errorf("probe must not be a dir existence/content check: %q", fp.gotCmd)
 		}
 	})
 
-	t.Run("absent", func(t *testing.T) {
-		fa := &fakeDirProbe{present: false}
-		if toolConfigDirPresent(fa, "/home/code", tcf) {
-			t.Error("want present=false when test -d fails")
+	t.Run("not seeded when no essential file exists", func(t *testing.T) {
+		fa := &fakeDirProbe{seeded: false}
+		if toolConfigSeeded(fa, "/home/code", tcf) {
+			t.Error("want seeded=false when no essential config file is present")
 		}
 	})
 }
