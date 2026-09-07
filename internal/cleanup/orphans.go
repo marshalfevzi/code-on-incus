@@ -142,7 +142,7 @@ func getRunningContainerNames() ([]string, error) {
 
 	var names []string
 	for _, c := range containers {
-		if c.State.Status == "Running" {
+		if container.StatusIsRunning(c.State.Status) {
 			names = append(names, c.Name)
 		}
 	}
@@ -175,7 +175,7 @@ func getRunningContainerIPs() ([]string, error) {
 
 	var ips []string
 	for _, c := range containers {
-		if c.State.Status != "Running" {
+		if !container.StatusIsRunning(c.State.Status) {
 			continue
 		}
 		if eth0, ok := c.State.Network["eth0"]; ok {
