@@ -11,10 +11,11 @@ fingerprint lookup queried "default", so the build aborted with "image not found
 
 To reproduce the bug specifically, the test project must have its OWN image store
 (`features.images=true`): otherwise it shares the default project's images and a
-lookup against "default" would still find the image, masking the bug. We copy the
-already-built `coi-default` base into the project and run a trivial *custom* build
-there (fast — the base exists, the script is a no-op), which still exercises the
-publish + fingerprint path where #777 lived.
+lookup against "default" would still find the image, masking the bug. We stage the
+already-built `coi-default` base into the project (via `incus image export` +
+`import`, since `incus image copy --target-project` is a network operation) and
+run a trivial *custom* build there (fast — the base exists, the script is a
+no-op), which still exercises the publish + fingerprint path where #777 lived.
 
 Deterministic coverage of the same wiring lives in the incus-less unit job
 (`internal/image`, TestImageFingerprintListArgs_UsesConfiguredProject); this test
@@ -60,28 +61,45 @@ def test_build_succeeds_on_nondefault_project(coi_binary, tmp_path):
         pytest.fail(f"Failed to create project {project}: {create.stderr}")
 
     try:
-        # The custom build needs its base visible in the project's image store.
-        # `local:` is the DESTINATION remote and is required: without it incus
-        # resolves the copy to a network remote and fails with "The source server
-        # isn't listening on the network" — this is a purely local, socket-only
-        # cross-project copy on the same daemon.
-        copy = _incus(
+        # The custom build needs its base visible in the project's own image
+        # store. `incus image copy … --target-project` performs a
+        # server-to-server (network) copy that fails on a socket-only daemon with
+        # "The source server isn't listening on the network", so the base is
+        # staged via export + import instead. Export yields either a single
+        # unified tarball (base.tar.gz — how coi's published images export) or a
+        # split metadata+rootfs pair (base + base.root); import takes the
+        # metadata first, then the optional rootfs.
+        export_dir = tmp_path / "imgexport"
+        export_dir.mkdir()
+        exp = _incus(
             "image",
-            "copy",
+            "export",
             BASE_ALIAS,
-            "local:",
+            str(export_dir / "base"),
             "--project",
             "default",
-            "--target-project",
+            timeout=180,
+        )
+        if exp.returncode != 0:
+            if is_incus_permission_error(exp.stderr):
+                pytest.skip(f"No permission to export base image: {exp.stderr}")
+            pytest.fail(f"Failed to export base image: {exp.stderr}")
+        # metadata (no .root suffix) sorts before the optional rootfs tarball.
+        parts = sorted(export_dir.iterdir(), key=lambda p: p.name.endswith(".root"))
+        imp = _incus(
+            "image",
+            "import",
+            *[str(p) for p in parts],
+            "--project",
             project,
             "--alias",
             BASE_ALIAS,
             timeout=180,
         )
-        if copy.returncode != 0:
-            if is_incus_permission_error(copy.stderr):
-                pytest.skip(f"No permission to copy base image: {copy.stderr}")
-            pytest.fail(f"Failed to copy base into {project}: {copy.stderr}")
+        if imp.returncode != 0:
+            if is_incus_permission_error(imp.stderr):
+                pytest.skip(f"No permission to import base image: {imp.stderr}")
+            pytest.fail(f"Failed to import base into {project}: {imp.stderr}")
 
         # Select the non-default project via trusted-scope project config, and a
         # trivial custom build (no-op script) that still publishes + fingerprints.
