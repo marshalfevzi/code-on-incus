@@ -65,7 +65,8 @@ def test_build_succeeds_on_nondefault_project(coi_binary, tmp_path):
             "image",
             "copy",
             BASE_ALIAS,
-            "local:",
+            "--project",
+            "default",
             "--target-project",
             project,
             "--alias",
@@ -86,7 +87,9 @@ def test_build_succeeds_on_nondefault_project(coi_binary, tmp_path):
             f'[container]\nimage = "{image_name}"\n\n'
             f'[container.build]\nbase = "{BASE_ALIAS}"\nscript = "build.sh"\n'
         )
-        (coi_dir / "profiles" / "nondefault" / "build.sh").write_text("#!/bin/bash\nset -e\ntrue\n")
+        (coi_dir / "profiles" / "nondefault" / "build.sh").write_text(
+            "#!/bin/bash\nset -e\ntrue\n"
+        )
 
         result = subprocess.run(
             [coi_binary, "build", "--profile", "nondefault"],
