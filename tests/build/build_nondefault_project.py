@@ -61,10 +61,15 @@ def test_build_succeeds_on_nondefault_project(coi_binary, tmp_path):
 
     try:
         # The custom build needs its base visible in the project's image store.
+        # `local:` is the DESTINATION remote and is required: without it incus
+        # resolves the copy to a network remote and fails with "The source server
+        # isn't listening on the network" — this is a purely local, socket-only
+        # cross-project copy on the same daemon.
         copy = _incus(
             "image",
             "copy",
             BASE_ALIAS,
+            "local:",
             "--project",
             "default",
             "--target-project",
